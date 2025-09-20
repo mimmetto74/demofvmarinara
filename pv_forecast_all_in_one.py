@@ -9,12 +9,12 @@ from datetime import date, timedelta
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 
+# ===============================
+# Config percorsi dataset e modello
+# ===============================
 CLOUD_DATA = "Dataset_Daily_EnergiaSeparata_2020_2025.csv"
 CLOUD_DATA_GZ = "Dataset_Daily_EnergiaSeparata_2020_2025.csv.gz"
-WIN_DATA = r"C:\Users\cpign\Desktop\demo fabio\Dataset_Daily_EnergiaSeparata_2020_2025.csv"
-
 CLOUD_MODEL = "pv_model.joblib"
-WIN_MODEL = r"C:\Users\cpign\Desktop\demo fabio\pv_model.joblib"
 
 def pick_existing_path(candidates):
     for p in candidates:
@@ -22,15 +22,19 @@ def pick_existing_path(candidates):
             return p
     return None
 
-DATA_PATH = pick_existing_path([CLOUD_DATA_GZ, CLOUD_DATA, WIN_DATA])
-MODEL_PATH = pick_existing_path([CLOUD_MODEL, WIN_MODEL]) or CLOUD_MODEL
+DATA_PATH = pick_existing_path([CLOUD_DATA_GZ, CLOUD_DATA])
+MODEL_PATH = pick_existing_path([CLOUD_MODEL]) or CLOUD_MODEL
 
+# Coordinate default impianto Marinara (Taranto)
 DEFAULT_LAT = 40.6432780
 DEFAULT_LON = 16.9860830
 
+# ===============================
+# Funzioni utili
+# ===============================
 def load_dataset():
     if DATA_PATH is None:
-        st.error("⚠️ Dataset non trovato. Carica il file nella repo o verifica il percorso locale.")
+        st.error("⚠️ Dataset non trovato. Carica il file nella repo.")
         return None
     try:
         return pd.read_csv(DATA_PATH, parse_dates=["Date"])
@@ -83,6 +87,8 @@ def get_forecast_irradiance(lat: float, lon: float, days_ahead: int = 1):
     data = r.json()
     irr_values = data["hourly"]["shortwave_radiation"]
     hours = pd.date_range(start=target_date + " 00:00", periods=len(irr_values), freq="H")
+
+    # Interpolazione a 15 minuti
     df_irr = pd.DataFrame({"Ora": hours, "Irraggiamento": irr_values}).set_index("Ora")
     df_irr = df_irr.resample("15T").interpolate()
     return float(df_irr["Irraggiamento"].mean()), df_irr
@@ -95,6 +101,9 @@ def estimate_power_curve(irr_series, daily_prod_forecast):
     kwh_curve = (irr_array / total_irr) * daily_prod_forecast
     return pd.Series(kwh_curve, index=irr_series.index)
 
+# ===============================
+# UI Streamlit
+# ===============================
 st.set_page_config(page_title="PV Forecast Dashboard", layout="wide")
 st.markdown(
     "<h1 style='text-align: center; color: orange;'>☀️ Solar Forecast - TESEO-RX for IMEPOWER</h1>",
@@ -102,9 +111,10 @@ st.markdown(
 )
 st.write("---")
 
-st.sidebar.title("Menu")
+st.sidebar.title("☀️ Menu")
 st.sidebar.markdown("Seleziona le opzioni:")
 
+# --- Analisi Storica ---
 st.header("📊 Analisi Storica")
 df = load_dataset()
 if df is not None:
@@ -133,6 +143,7 @@ if df is not None:
         mime="text/csv"
     )
 
+# --- Addestramento ---
 st.header("🛠️ Addestramento modello")
 if st.button("Addestra modello con dati storici"):
     if df is not None:
@@ -143,6 +154,7 @@ if st.button("Addestra modello con dati storici"):
             with open(MODEL_PATH, "rb") as f:
                 st.download_button("⬇️ Scarica modello allenato", f, file_name="pv_model.joblib")
 
+# --- Previsione ---
 st.header("🔮 Previsione FV")
 lat = st.number_input("Latitudine", value=DEFAULT_LAT, format="%.6f")
 lon = st.number_input("Longitudine", value=DEFAULT_LON, format="%.6f")
