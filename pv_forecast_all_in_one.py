@@ -10,6 +10,32 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 
 # ===============================
+# Autenticazione semplice
+# ===============================
+def check_password():
+    if "password_correct" not in st.session_state:
+        st.session_state.password_correct = False
+
+    if st.session_state.password_correct:
+        return True
+
+    st.title("🔒 Accesso richiesto")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+        if username == "fabiodaniello" and password == "admin2025":
+            st.session_state.password_correct = True
+            st.experimental_rerun()
+        else:
+            st.error("❌ Credenziali non valide")
+
+    return False
+
+if not check_password():
+    st.stop()
+
+# ===============================
 # Config percorsi dataset e modello
 # ===============================
 CLOUD_DATA = "Dataset_Daily_EnergiaSeparata_2020_2025.csv"
@@ -88,7 +114,6 @@ def get_forecast_irradiance(lat: float, lon: float, days_ahead: int = 1):
     irr_values = data["hourly"]["shortwave_radiation"]
     hours = pd.date_range(start=target_date + " 00:00", periods=len(irr_values), freq="H")
 
-    # Interpolazione a 15 minuti
     df_irr = pd.DataFrame({"Ora": hours, "Irraggiamento": irr_values}).set_index("Ora")
     df_irr = df_irr.resample("15T").interpolate()
     return float(df_irr["Irraggiamento"].mean()), df_irr
