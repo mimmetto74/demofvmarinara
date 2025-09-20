@@ -13,6 +13,7 @@ from sklearn.metrics import mean_absolute_error, r2_score
 # Config percorsi dataset e modello
 # ===============================
 CLOUD_DATA = "Dataset_Daily_EnergiaSeparata_2020_2025.csv"
+CLOUD_DATA_GZ = "Dataset_Daily_EnergiaSeparata_2020_2025.csv.gz"
 CLOUD_MODEL = "pv_model.joblib"
 
 def pick_existing_path(candidates):
