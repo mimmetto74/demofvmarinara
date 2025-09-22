@@ -24,9 +24,9 @@ def check_password():
     password = st.text_input("Password", type="password")
 
     if st.button("Login"):
-        if username == "fabiodaniello" and password == "admin2025":
+        if username == "FVMANAGER" and password == "admin2025":
             st.session_state.password_correct = True
-            st.experimental_rerun()
+            st.rerun()   # ✅ compatibile con Streamlit moderno
         else:
             st.error("❌ Credenziali non valide")
 
