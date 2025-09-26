@@ -138,7 +138,7 @@ def forecast_day_ahead(features: pd.DataFrame) -> float:
 # ===============================
 st.set_page_config(page_title="PV Forecast Dashboard", layout="wide")
 st.markdown(
-    "<h1 style='text-align: center; color: orange;'>☀️ Solar Forecast - TESEO-RX for IMEPOWER</h1>",
+    "<h1 style='text-align: center; color: orange;'>☀️ Solar Forecast - ROBOTRONIX for IMEPOWER</h1>",
     unsafe_allow_html=True
 )
 st.write("---")
