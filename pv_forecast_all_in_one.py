@@ -56,17 +56,17 @@ DEFAULT_LAT = 40.6432780
 DEFAULT_LON = 16.9860830
 
 # ===============================
-# Config Meteomatics
+# Config Meteomatics (parametri corretti)
 # ===============================
 MM_USER = "xensoramasrl_pignatelli_cosimo"
 MM_PASS = "m7jfJRWcqN09lr88YWYs"
 BASE_URL = "https://api.meteomatics.com"
 
 PARAMS = [
-    "shortwave_radiation:W",
-    "cloud_cover:%",
-    "t_2m:C",
-    "wind_speed_10m:ms"
+    "global_rad:W",       # Irraggiamento solare globale
+    "cloud_cover:idx",    # Copertura nuvolosa (indice)
+    "t_2m:C",             # Temperatura 2m
+    "wind_speed_10m:ms"   # Vento 10m
 ]
 
 def get_meteomatics_forecast(lat, lon, days_ahead=1):
@@ -140,7 +140,7 @@ def forecast_day_ahead(features: pd.DataFrame) -> float:
 # ===============================
 st.set_page_config(page_title="PV Forecast Dashboard", layout="wide")
 st.markdown(
-    "<h1 style='text-align: center; color: orange;'>☀️ Solar Forecast - ROBOTRONIX for IMEPOWER</h1>",
+    "<h1 style='text-align: center; color: orange;'>☀️ Solar Forecast - TESEO-RX for IMEPOWER</h1>",
     unsafe_allow_html=True
 )
 st.write("---")
@@ -198,8 +198,8 @@ days_ahead = 1 if giorno == "Domani" else 2
 if st.button("Calcola previsione con Meteomatics"):
     df_forecast = get_meteomatics_forecast(lat, lon, days_ahead=days_ahead)
     features_mean = pd.DataFrame({
-        "G_M0_Wm2": [df_forecast["shortwave_radiation:W"].mean()],
-        "cloud_cover": [df_forecast["cloud_cover:%"].mean()],
+        "G_M0_Wm2": [df_forecast["global_rad:W"].mean()],
+        "cloud_cover": [df_forecast["cloud_cover:idx"].mean()],
         "temperature": [df_forecast["t_2m:C"].mean()],
         "wind_speed": [df_forecast["wind_speed_10m:ms"].mean()]
     })
@@ -207,7 +207,7 @@ if st.button("Calcola previsione con Meteomatics"):
     if prod_forecast is not None:
         st.subheader(f"📅 Risultati ({giorno})")
         st.metric("Irraggiamento medio previsto", f"{features_mean['G_M0_Wm2'][0]:.1f} W/m²")
-        st.metric("Copertura nuvolosa media", f"{features_mean['cloud_cover'][0]:.1f}%")
+        st.metric("Copertura nuvolosa media", f"{features_mean['cloud_cover'][0]:.1f}")
         st.metric("Temperatura media", f"{features_mean['temperature'][0]:.1f} °C")
         st.metric("Vento medio", f"{features_mean['wind_speed'][0]:.1f} m/s")
         st.metric("Produzione stimata", f"{prod_forecast:.1f} kWh")
