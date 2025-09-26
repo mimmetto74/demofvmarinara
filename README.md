@@ -1,7 +1,7 @@
 # ☀️ Solar Forecast - ROBOTRONIX for IMEPOWER
 
 Applicazione **Streamlit** per la previsione della produzione fotovoltaica,
-basata su dati storici + Meteomatics API.
+basata su dati storici + API gratuite Open-Meteo (irradianza e nuvolosità).
 
 ---
 
@@ -27,17 +27,10 @@ Poi apri [http://localhost:8501](http://localhost:8501).
 
 ---
 
-## 🔑 Meteomatics API
+## 🔑 Open-Meteo API
 
-Il modello integra dati meteo (radiazione, nuvolosità, vento, temperatura)
-tramite Meteomatics API.
-
-Aggiorna le tue credenziali nello script se necessario:
-
-```python
-USERNAME = "xxxxx"
-PASSWORD = "xxxxx"
-```
+Il modello integra dati meteo (radiazione solare e nuvolosità)
+tramite Open-Meteo, che è gratuito e non richiede API key.
 
 ---
 

@@ -2,80 +2,74 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-from requests.auth import HTTPBasicAuth
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 import joblib
 import os
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta
 
-# =================================
+# ===============================
+# 🔒 Login semplice
+# ===============================
+def check_password():
+    if "password_correct" not in st.session_state:
+        st.session_state.password_correct = False
+
+    if st.session_state.password_correct:
+        return True
+
+    st.title("🔒 Accesso richiesto")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
+        if username == "FVMANAGER" and password == "admin2025":
+            st.session_state.password_correct = True
+            st.rerun()
+        else:
+            st.error("❌ Credenziali non valide")
+
+    return False
+
+if not check_password():
+    st.stop()
+
+# ===============================
 # Config
-# =================================
-USERNAME = "xensoramasrl_pignatelli_cosimo"
-PASSWORD = "m7jfJRWcqN09lr88YWYs"
-
-DEFAULT_LAT, DEFAULT_LON = 40.643278, 16.986083
-MODEL_FILE = "pv_model.joblib"
+# ===============================
 DATA_FILE = "Dataset_Daily_EnergiaSeparata_2020_2025.csv"
+MODEL_FILE = "pv_model.joblib"
+DEFAULT_LAT, DEFAULT_LON = 40.643278, 16.986083
 
-# Parametri Meteomatics disponibili con account trial
-METEO_PARAMS = [
-    "t_2m:C",             # Temperatura
-    "wind_speed_10m:ms",  # Vento
-    "precip_1h:mm",       # Precipitazioni
-    "cloud_cover:frac",   # Copertura nuvolosa (frazione 0–1)
-    "global_rad:W"        # Radiazione globale (se disponibile sul trial)
-]
+# ===============================
+# Open-Meteo API
+# ===============================
+def get_openmeteo_forecast(lat, lon, days_ahead=1):
+    start = date.today() + timedelta(days=days_ahead)
+    end = start
 
-# =================================
-# Funzioni
-# =================================
-def get_meteomatics_forecast(lat, lon, days_ahead=1):
-    start = (date.today() + timedelta(days=days_ahead)).strftime("%Y-%m-%dT00:00:00Z")
-    end = (date.today() + timedelta(days=days_ahead)).strftime("%Y-%m-%dT23:00:00Z")
-    url = f"https://api.meteomatics.com/{start}--{end}:PT1H/{','.join(METEO_PARAMS)}/{lat},{lon}/json"
+    url = (
+        f"https://api.open-meteo.com/v1/forecast"
+        f"?latitude={lat}&longitude={lon}"
+        f"&daily=global_radiation_sum,cloudcover"
+        f"&timezone=auto"
+        f"&start_date={start}&end_date={end}"
+    )
 
-    try:
-        response = requests.get(url, auth=HTTPBasicAuth(USERNAME, PASSWORD))
-        response.raise_for_status()
-        data = response.json()
+    r = requests.get(url)
+    r.raise_for_status()
+    data = r.json()["daily"]
 
-        dfs = []
-        for param in data.get("data", []):
-            param_name = param["parameter"]
-            series = {
-                "date": [d["date"] for d in param["coordinates"][0]["dates"]],
-                param_name: [d["value"] for d in param["coordinates"][0]["dates"]]
-            }
-            dfs.append(pd.DataFrame(series))
+    df = pd.DataFrame(data)
+    df["time"] = pd.to_datetime(df["time"])
+    return df
 
-        if not dfs:
-            return pd.DataFrame()
-
-        df = dfs[0]
-        for d in dfs[1:]:
-            df = df.merge(d, on="date", how="outer")
-
-        df["date"] = pd.to_datetime(df["date"])
-        return df
-
-    except Exception as e:
-        st.error(f"Errore Meteomatics: {e}")
-        return pd.DataFrame()
-
-
+# ===============================
+# Training modello
+# ===============================
 def train_model(df):
-    features = ["G_M0_Wm2", "cloud_cover", "temperature"]
-    available_features = [f for f in features if f in df.columns]
-
-    df = df.dropna(subset=["E_INT_Daily_kWh"] + available_features)
-
-    if len(available_features) == 0:
-        st.error("❌ Nessuna feature meteo disponibile per addestrare il modello")
-        return None, None
-
-    X = df[available_features]
+    df = df.dropna(subset=["E_INT_Daily_kWh", "G_M0_Wm2", "cloudcover"])
+    X = df[["G_M0_Wm2", "cloudcover"]]
     y = df["E_INT_Daily_kWh"]
 
     model = LinearRegression()
@@ -85,65 +79,70 @@ def train_model(df):
     mae = mean_absolute_error(y, y_pred)
     r2 = r2_score(y, y_pred)
 
-    joblib.dump((model, available_features), MODEL_FILE)
+    joblib.dump(model, MODEL_FILE)
     return mae, r2
 
+# ===============================
+# Previsione
+# ===============================
+def forecast_day_ahead(lat, lon, days_ahead=1):
+    df_forecast = get_openmeteo_forecast(lat, lon, days_ahead)
+    model = joblib.load(MODEL_FILE)
 
-def predict_energy(df_forecast, model_path=MODEL_FILE):
-    if not os.path.exists(model_path):
-        return None
+    X_new = df_forecast[["global_radiation_sum", "cloudcover"]].rename(
+        columns={"global_radiation_sum": "G_M0_Wm2"}
+    )
+    yhat = model.predict(X_new)
+    return df_forecast, yhat
 
-    model, features = joblib.load(model_path)
-    available_features = [f for f in features if f in df_forecast.columns]
-    if not available_features:
-        return None
-
-    X_new = df_forecast[available_features].fillna(0)
-    return model.predict(X_new)
-
-
-# =================================
-# Streamlit UI
-# =================================
+# ===============================
+# UI Streamlit
+# ===============================
 st.set_page_config(page_title="Solar Forecast - ROBOTRONIX", layout="wide")
-st.title("☀️ Solar Forecast - ROBOTRONIX for IMEPOWER")
+st.markdown(
+    "<h1 style='text-align: center; color: orange;'>☀️ Solar Forecast - ROBOTRONIX for IMEPOWER</h1>",
+    unsafe_allow_html=True
+)
+st.write("---")
 
-menu = st.sidebar.radio("📂 Menu", ["Analisi Storica", "Addestramento modello", "Previsione FV"])
+menu = st.sidebar.radio("📂 Menu", ["📊 Analisi Storica", "🛠️ Training modello", "🔮 Previsione FV"])
 
 # --- Analisi Storica ---
-if menu == "Analisi Storica":
+if menu == "📊 Analisi Storica":
     if os.path.exists(DATA_FILE):
         df = pd.read_csv(DATA_FILE, parse_dates=["Date"])
         st.success("✅ Dataset caricato")
+        st.line_chart(df.set_index("Date")[["E_INT_Daily_kWh", "G_M0_Wm2"]])
         st.dataframe(df.head())
     else:
         st.error("❌ Dataset non trovato")
 
-# --- Addestramento ---
-elif menu == "Addestramento modello":
+# --- Training ---
+elif menu == "🛠️ Training modello":
     if os.path.exists(DATA_FILE):
         df = pd.read_csv(DATA_FILE, parse_dates=["Date"])
-        mae, r2 = train_model(df)
-        if mae is not None:
-            st.success(f"✅ Modello multivariato addestrato - MAE={mae:.2f}, R2={r2:.2f}")
+        if "cloudcover" not in df.columns:
+            st.warning("⚠️ Il dataset storico non ha cloudcover → serve aggiungerla manualmente o stimarla")
+        else:
+            mae, r2 = train_model(df)
+            st.success(f"✅ Modello addestrato - MAE={mae:.2f}, R²={r2:.3f}")
     else:
         st.error("❌ Dataset non trovato per training")
 
 # --- Previsione ---
-elif menu == "Previsione FV":
+elif menu == "🔮 Previsione FV":
     lat = st.number_input("Latitudine", value=DEFAULT_LAT)
     lon = st.number_input("Longitudine", value=DEFAULT_LON)
-    days_ahead = st.selectbox("Seleziona giorno", {"Domani": 1, "Dopodomani": 2})
+    giorno = st.selectbox("Seleziona giorno", ["Domani", "Dopodomani"])
+    days_ahead = 1 if giorno == "Domani" else 2
 
-    if st.button("Calcola previsione con Meteomatics"):
-        df_forecast = get_meteomatics_forecast(lat, lon, days_ahead)
-        if not df_forecast.empty:
-            st.write("📊 Dati Meteomatics")
-            st.dataframe(df_forecast.head())
+    if st.button("Calcola previsione"):
+        df_forecast, yhat = forecast_day_ahead(lat, lon, days_ahead)
+        df_forecast["forecast_kWh"] = yhat
 
-            yhat = predict_energy(df_forecast)
-            if yhat is not None:
-                df_forecast["forecast_kWh"] = yhat
-                st.line_chart(df_forecast.set_index("date")[["forecast_kWh"]])
-            else:
-                st.warning("⚠️ Nessun modello addestrato o variabili meteo mancanti.")
+        st.subheader(f"📅 Risultati previsione {giorno}")
+        st.metric("Irraggiamento previsto", f"{df_forecast['global_radiation_sum'].iloc[0]:.1f} Wh/m²")
+        st.metric("Nuvolosità prevista", f"{df_forecast['cloudcover'].iloc[0]:.1f} %")
+        st.metric("Produzione stimata", f"{df_forecast['forecast_kWh'].iloc[0]:.1f} kWh")
+
+        st.line_chart(df_forecast.set_index("time")[["forecast_kWh"]])
