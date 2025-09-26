@@ -1,6 +1,6 @@
 # ☀️ Solar Forecast - TESEO-RX for IMEPOWER
 
-Questa applicazione usa **Streamlit** per prevedere la produzione FV.
+Applicazione **Streamlit** per la previsione della produzione FV.
 
 ### 🔧 Parametri Meteomatics usati
 - Irraggiamento solare globale (`global_rad:W`)
@@ -11,4 +11,4 @@ Questa applicazione usa **Streamlit** per prevedere la produzione FV.
 ### 🚀 Deploy su Railway
 1. Carica questa repo su GitHub
 2. Connetti la repo a Railway
-3. Lancia il deploy: l’app sarà disponibile online
+3. Railway userà `Procfile` per avviare automaticamente Streamlit
