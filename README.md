@@ -1,4 +1,4 @@
-# ☀️ Solar Forecast - TESEO-RX for IMEPOWER
+# ☀️ Solar Forecast - ROBOTRONIX for IMEPOWER
 
 Demo software sviluppata per **IMEPOWER**: previsioni di produzione fotovoltaica a breve termine basate su dati storici e meteo.
 
