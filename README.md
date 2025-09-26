@@ -1,15 +1,16 @@
 # 🌞 Solar Forecast - ROBOTRONIX for IMEPOWER
 
-Demo Streamlit con addestramento modello su dati storici e previsione produzione FV
-usando **Open-Meteo** (`shortwave_radiation_sum` + `cloudcover_mean`).
+Questa è una demo Streamlit per la previsione della produzione fotovoltaica.
 
-## ▶️ Avvio locale
-```bash
-pip install -r requirements.txt
-streamlit run pv_forecast_all_in_one.py
-```
-Login: `FVMANAGER` / `admin2025`
+## Funzionalità
+- Login (utente **FVMANAGER**, password **admin2025**)
+- Addestramento modello da CSV con radiazione (`G_M0_Wm2`), copertura nuvolosa (`cloud_cover`) e produzione (`E_INT_Daily_kWh`)
+- Previsione giorno successivo o dopodomani tramite API **Open-Meteo**
 
-## 🚀 Deploy su Railway
-- Connetti la repo GitHub a Railway
-- Il Procfile avvia Streamlit su porta 8080
+## Deploy
+1. Carica i file su **GitHub**
+2. Connetti il repo a **Railway**
+3. Imposta il comando di avvio:  
+   ```bash
+   web: streamlit run pv_forecast_all_in_one.py
+   ```
