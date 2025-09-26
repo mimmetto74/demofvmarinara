@@ -63,10 +63,10 @@ MM_PASS = "m7jfJRWcqN09lr88YWYs"
 BASE_URL = "https://api.meteomatics.com"
 
 PARAMS = [
-    "global_rad:W",       # Irraggiamento solare globale
-    "cloud_cover:idx",    # Copertura nuvolosa (indice)
-    "t_2m:C",             # Temperatura 2m
-    "wind_speed_10m:ms"   # Vento 10m
+    "solar_rad:mean:W",   # Irraggiamento solare medio
+    "cloud_cover:tot:p",  # Copertura nuvolosa totale (%)
+    "t_2m:C",             # Temperatura a 2m
+    "wind_speed_10m:ms"   # Vento a 10m
 ]
 
 def get_meteomatics_forecast(lat, lon, days_ahead=1):
@@ -197,13 +197,13 @@ days_ahead = 1 if giorno == "Domani" else 2
 if st.button("Calcola previsione con Meteomatics"):
     df_forecast = get_meteomatics_forecast(lat, lon, days_ahead=days_ahead)
     features_mean = pd.DataFrame({
-        "G_M0_Wm2": [df_forecast["global_rad:W"].mean()]
+        "G_M0_Wm2": [df_forecast["solar_rad:mean:W"].mean()]
     })
     prod_forecast = forecast_day_ahead(features_mean)
     if prod_forecast is not None:
         st.subheader(f"📅 Risultati ({giorno})")
         st.metric("Irraggiamento medio previsto", f"{features_mean['G_M0_Wm2'][0]:.1f} W/m²")
-        st.metric("Copertura nuvolosa media", f"{df_forecast['cloud_cover:idx'].mean():.1f}")
+        st.metric("Copertura nuvolosa media", f"{df_forecast['cloud_cover:tot:p'].mean():.1f} %")
         st.metric("Temperatura media", f"{df_forecast['t_2m:C'].mean():.1f} °C")
         st.metric("Vento medio", f"{df_forecast['wind_speed_10m:ms'].mean():.1f} m/s")
         st.metric("Produzione stimata", f"{prod_forecast:.1f} kWh")
