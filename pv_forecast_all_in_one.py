@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -15,41 +14,27 @@ from sklearn.metrics import mean_absolute_error, r2_score
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state.password_correct = False
-
     if st.session_state.password_correct:
         return True
-
     st.title("🔒 Accesso richiesto")
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
-
     if st.button("Login"):
         if username == "FVMANAGER" and password == "admin2025":
             st.session_state.password_correct = True
             st.rerun()
         else:
             st.error("❌ Credenziali non valide")
-
     return False
 
 if not check_password():
     st.stop()
 
 # ===============================
-# Config percorsi dataset e modello
+# Config percorsi dataset e modello (fissi in root repo)
 # ===============================
-CLOUD_DATA = "Dataset_Daily_EnergiaSeparata_2020_2025.csv"
-CLOUD_DATA_GZ = "Dataset_Daily_EnergiaSeparata_2020_2025.csv.gz"
-CLOUD_MODEL = "pv_model.joblib"
-
-def pick_existing_path(candidates):
-    for p in candidates:
-        if os.path.exists(p):
-            return p
-    return None
-
-DATA_PATH = pick_existing_path([CLOUD_DATA_GZ, CLOUD_DATA])
-MODEL_PATH = pick_existing_path([CLOUD_MODEL]) or CLOUD_MODEL
+DATA_PATH = "Dataset_Daily_EnergiaSeparata_2020_2025.csv"
+MODEL_PATH = "pv_model.joblib"
 
 # Coordinate default impianto Marinara (Taranto)
 DEFAULT_LAT = 40.6432780
@@ -59,8 +44,8 @@ DEFAULT_LON = 16.9860830
 # Funzioni utili
 # ===============================
 def load_dataset():
-    if DATA_PATH is None:
-        st.error("⚠️ Dataset non trovato. Carica il file nella repo.")
+    if not os.path.exists(DATA_PATH):
+        st.error(f"⚠️ Dataset non trovato: {DATA_PATH}. Assicurati che il file sia nella root della repo.")
         return None
     try:
         return pd.read_csv(DATA_PATH, parse_dates=["Date"])
@@ -72,17 +57,13 @@ def train_model(df):
     df = df.dropna(subset=["E_INT_Daily_kWh", "G_M0_Wm2"])
     train = df[df["Date"] < "2025-01-01"]
     test = df[df["Date"] >= "2025-01-01"]
-
     X_train, y_train = train[["G_M0_Wm2"]], train["E_INT_Daily_kWh"]
     X_test, y_test = test[["G_M0_Wm2"]], test["E_INT_Daily_kWh"]
-
     model = LinearRegression()
     model.fit(X_train, y_train)
-
     y_pred = model.predict(X_test)
     mae = mean_absolute_error(y_test, y_pred)
     r2 = r2_score(y_test, y_pred)
-
     joblib.dump(model, MODEL_PATH)
     return mae, r2
 
@@ -113,7 +94,7 @@ def get_forecast_irradiance(lat: float, lon: float, days_ahead: int = 1):
     data = r.json()
     irr_values = data["hourly"]["shortwave_radiation"]
     hours = pd.date_range(start=target_date + " 00:00", periods=len(irr_values), freq="H")
-
+    # Interpolazione a 15 minuti
     df_irr = pd.DataFrame({"Ora": hours, "Irraggiamento": irr_values}).set_index("Ora")
     df_irr = df_irr.resample("15T").interpolate()
     return float(df_irr["Irraggiamento"].mean()), df_irr
@@ -135,7 +116,6 @@ st.markdown(
     unsafe_allow_html=True
 )
 st.write("---")
-
 st.sidebar.title("☀️ Menu")
 st.sidebar.markdown("Seleziona le opzioni:")
 
@@ -153,14 +133,11 @@ if df is not None:
     )
     mask = (df["Date"] >= pd.to_datetime(start_date)) & (df["Date"] <= pd.to_datetime(end_date))
     df_filtered = df.loc[mask]
-
     st.line_chart(df_filtered.set_index("Date")[["E_INT_Daily_kWh", "G_M0_Wm2"]])
-
     c1, c2, c3 = st.columns(3)
     c1.metric("Produzione media [kWh]", f"{df_filtered['E_INT_Daily_kWh'].mean():.1f}")
     c2.metric("Produzione max [kWh]",   f"{df_filtered['E_INT_Daily_kWh'].max():.1f}")
     c3.metric("Irraggiamento medio [W/m²]", f"{df_filtered['G_M0_Wm2'].mean():.1f}")
-
     st.download_button(
         "⬇️ Scarica CSV filtrato",
         df_filtered.to_csv(index=False).encode("utf-8"),
@@ -193,7 +170,6 @@ if st.button("Calcola previsione"):
         st.subheader(f"📅 Risultati ({giorno})")
         st.metric("Irraggiamento medio previsto", f"{irr_mean:.1f} W/m²")
         st.metric("Produzione stimata", f"{prod_forecast:.1f} kWh")
-
         prod_curve = estimate_power_curve(df_irr["Irraggiamento"], prod_forecast)
         df_plot = pd.DataFrame({
             "Irraggiamento [W/m²]": df_irr["Irraggiamento"],
