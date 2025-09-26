@@ -5,7 +5,7 @@ import numpy as np
 import requests
 import joblib
 import os
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, r2_score
 
@@ -26,7 +26,7 @@ def check_password():
     if st.button("Login"):
         if username == "FVMANAGER" and password == "admin2025":
             st.session_state.password_correct = True
-            st.rerun()   # ✅ compatibile con Streamlit moderno
+            st.rerun()
         else:
             st.error("❌ Credenziali non valide")
 
@@ -36,7 +36,7 @@ if not check_password():
     st.stop()
 
 # ===============================
-# Config percorsi dataset e modello
+# Config dataset e modello
 # ===============================
 CLOUD_DATA = "Dataset_Daily_EnergiaSeparata_2020_2025.csv"
 CLOUD_DATA_GZ = "Dataset_Daily_EnergiaSeparata_2020_2025.csv.gz"
@@ -56,7 +56,39 @@ DEFAULT_LAT = 40.6432780
 DEFAULT_LON = 16.9860830
 
 # ===============================
-# Funzioni utili
+# Config Meteomatics
+# ===============================
+MM_USER = "xensoramasrl_pignatelli_cosimo"
+MM_PASS = "m7jfJRWcqN09lr88YWYs"
+BASE_URL = "https://api.meteomatics.com"
+
+PARAMS = [
+    "shortwave_radiation:W",
+    "cloud_cover:%",
+    "t_2m:C",
+    "wind_speed_10m:ms"
+]
+
+def get_meteomatics_forecast(lat, lon, days_ahead=1):
+    start = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%dT00:00:00Z")
+    end   = (datetime.utcnow() + timedelta(days=days_ahead)).strftime("%Y-%m-%dT23:59:00Z")
+    url = f"{BASE_URL}/{start}--{end}:PT1H/{','.join(PARAMS)}/{lat},{lon}/json"
+
+    r = requests.get(url, auth=(MM_USER, MM_PASS))
+    r.raise_for_status()
+    data = r.json()["data"]
+
+    df = pd.DataFrame()
+    for var in data:
+        name = var["parameter"]
+        df[name] = [float(e["value"]) for e in var["coordinates"][0]["dates"]]
+    df["time"] = [pd.to_datetime(e["date"]) for e in data[0]["coordinates"][0]["dates"]]
+    df = df.set_index("time")
+
+    return df
+
+# ===============================
+# Funzioni modello
 # ===============================
 def load_dataset():
     if DATA_PATH is None:
@@ -69,12 +101,16 @@ def load_dataset():
         return None
 
 def train_model(df):
-    df = df.dropna(subset=["E_INT_Daily_kWh", "G_M0_Wm2"])
+    df = df.dropna(subset=[
+        "E_INT_Daily_kWh", "G_M0_Wm2", "cloud_cover", "temperature", "wind_speed"
+    ])
     train = df[df["Date"] < "2025-01-01"]
-    test = df[df["Date"] >= "2025-01-01"]
+    test  = df[df["Date"] >= "2025-01-01"]
 
-    X_train, y_train = train[["G_M0_Wm2"]], train["E_INT_Daily_kWh"]
-    X_test, y_test = test[["G_M0_Wm2"]], test["E_INT_Daily_kWh"]
+    X_train = train[["G_M0_Wm2", "cloud_cover", "temperature", "wind_speed"]]
+    y_train = train["E_INT_Daily_kWh"]
+    X_test  = test[["G_M0_Wm2", "cloud_cover", "temperature", "wind_speed"]]
+    y_test  = test["E_INT_Daily_kWh"]
 
     model = LinearRegression()
     model.fit(X_train, y_train)
@@ -93,45 +129,18 @@ def load_model():
         st.error("Modello non trovato! Esegui prima l'addestramento.")
         return None
 
-def forecast_day_ahead(irradiance_forecast: float) -> float:
+def forecast_day_ahead(features: pd.DataFrame) -> float:
     model = load_model()
     if model is None:
         return None
-    X_future = pd.DataFrame({"G_M0_Wm2": [irradiance_forecast]})
-    return float(model.predict(X_future)[0])
-
-def get_forecast_irradiance(lat: float, lon: float, days_ahead: int = 1):
-    target_date = (date.today() + timedelta(days=days_ahead)).isoformat()
-    url = (
-        f"https://api.open-meteo.com/v1/forecast?"
-        f"latitude={lat}&longitude={lon}"
-        f"&hourly=shortwave_radiation&timezone=auto"
-        f"&start_date={target_date}&end_date={target_date}"
-    )
-    r = requests.get(url)
-    r.raise_for_status()
-    data = r.json()
-    irr_values = data["hourly"]["shortwave_radiation"]
-    hours = pd.date_range(start=target_date + " 00:00", periods=len(irr_values), freq="H")
-
-    df_irr = pd.DataFrame({"Ora": hours, "Irraggiamento": irr_values}).set_index("Ora")
-    df_irr = df_irr.resample("15T").interpolate()
-    return float(df_irr["Irraggiamento"].mean()), df_irr
-
-def estimate_power_curve(irr_series, daily_prod_forecast):
-    irr_array = irr_series.values
-    total_irr = irr_array.sum()
-    if total_irr == 0:
-        return pd.Series(np.zeros_like(irr_array), index=irr_series.index)
-    kwh_curve = (irr_array / total_irr) * daily_prod_forecast
-    return pd.Series(kwh_curve, index=irr_series.index)
+    return float(model.predict(features)[0])
 
 # ===============================
 # UI Streamlit
 # ===============================
 st.set_page_config(page_title="PV Forecast Dashboard", layout="wide")
 st.markdown(
-    "<h1 style='text-align: center; color: orange;'>☀️ Solar Forecast - ROBOTRONIX for IMEPOWER</h1>",
+    "<h1 style='text-align: center; color: orange;'>☀️ Solar Forecast - TESEO-RX for IMEPOWER</h1>",
     unsafe_allow_html=True
 )
 st.write("---")
@@ -186,18 +195,19 @@ lon = st.number_input("Longitudine", value=DEFAULT_LON, format="%.6f")
 giorno = st.selectbox("Giorno di previsione", ["Domani", "Dopodomani"])
 days_ahead = 1 if giorno == "Domani" else 2
 
-if st.button("Calcola previsione"):
-    irr_mean, df_irr = get_forecast_irradiance(lat, lon, days_ahead=days_ahead)
-    prod_forecast = forecast_day_ahead(irr_mean)
+if st.button("Calcola previsione con Meteomatics"):
+    df_forecast = get_meteomatics_forecast(lat, lon, days_ahead=days_ahead)
+    features_mean = pd.DataFrame({
+        "G_M0_Wm2": [df_forecast["shortwave_radiation:W"].mean()],
+        "cloud_cover": [df_forecast["cloud_cover:%"].mean()],
+        "temperature": [df_forecast["t_2m:C"].mean()],
+        "wind_speed": [df_forecast["wind_speed_10m:ms"].mean()]
+    })
+    prod_forecast = forecast_day_ahead(features_mean)
     if prod_forecast is not None:
         st.subheader(f"📅 Risultati ({giorno})")
-        st.metric("Irraggiamento medio previsto", f"{irr_mean:.1f} W/m²")
+        st.metric("Irraggiamento medio previsto", f"{features_mean['G_M0_Wm2'][0]:.1f} W/m²")
+        st.metric("Copertura nuvolosa media", f"{features_mean['cloud_cover'][0]:.1f}%")
+        st.metric("Temperatura media", f"{features_mean['temperature'][0]:.1f} °C")
+        st.metric("Vento medio", f"{features_mean['wind_speed'][0]:.1f} m/s")
         st.metric("Produzione stimata", f"{prod_forecast:.1f} kWh")
-
-        prod_curve = estimate_power_curve(df_irr["Irraggiamento"], prod_forecast)
-        df_plot = pd.DataFrame({
-            "Irraggiamento [W/m²]": df_irr["Irraggiamento"],
-            "Produzione stimata [kWh/15min]": prod_curve
-        })
-        st.subheader("📈 Andamento previsto ogni 15 minuti")
-        st.line_chart(df_plot)
