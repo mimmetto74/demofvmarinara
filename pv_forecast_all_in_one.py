@@ -101,15 +101,14 @@ def load_dataset():
         return None
 
 def train_model(df):
-    df = df.dropna(subset=[
-        "E_INT_Daily_kWh", "G_M0_Wm2", "cloud_cover", "temperature", "wind_speed"
-    ])
+    # Training solo su G_M0_Wm2 (lo storico non ha altre variabili meteo)
+    df = df.dropna(subset=["E_INT_Daily_kWh", "G_M0_Wm2"])
     train = df[df["Date"] < "2025-01-01"]
     test  = df[df["Date"] >= "2025-01-01"]
 
-    X_train = train[["G_M0_Wm2", "cloud_cover", "temperature", "wind_speed"]]
+    X_train = train[["G_M0_Wm2"]]
     y_train = train["E_INT_Daily_kWh"]
-    X_test  = test[["G_M0_Wm2", "cloud_cover", "temperature", "wind_speed"]]
+    X_test  = test[["G_M0_Wm2"]]
     y_test  = test["E_INT_Daily_kWh"]
 
     model = LinearRegression()
@@ -198,16 +197,13 @@ days_ahead = 1 if giorno == "Domani" else 2
 if st.button("Calcola previsione con Meteomatics"):
     df_forecast = get_meteomatics_forecast(lat, lon, days_ahead=days_ahead)
     features_mean = pd.DataFrame({
-        "G_M0_Wm2": [df_forecast["global_rad:W"].mean()],
-        "cloud_cover": [df_forecast["cloud_cover:idx"].mean()],
-        "temperature": [df_forecast["t_2m:C"].mean()],
-        "wind_speed": [df_forecast["wind_speed_10m:ms"].mean()]
+        "G_M0_Wm2": [df_forecast["global_rad:W"].mean()]
     })
     prod_forecast = forecast_day_ahead(features_mean)
     if prod_forecast is not None:
         st.subheader(f"📅 Risultati ({giorno})")
         st.metric("Irraggiamento medio previsto", f"{features_mean['G_M0_Wm2'][0]:.1f} W/m²")
-        st.metric("Copertura nuvolosa media", f"{features_mean['cloud_cover'][0]:.1f}")
-        st.metric("Temperatura media", f"{features_mean['temperature'][0]:.1f} °C")
-        st.metric("Vento medio", f"{features_mean['wind_speed'][0]:.1f} m/s")
+        st.metric("Copertura nuvolosa media", f"{df_forecast['cloud_cover:idx'].mean():.1f}")
+        st.metric("Temperatura media", f"{df_forecast['t_2m:C'].mean():.1f} °C")
+        st.metric("Vento medio", f"{df_forecast['wind_speed_10m:ms'].mean():.1f} m/s")
         st.metric("Produzione stimata", f"{prod_forecast:.1f} kWh")
