@@ -1,16 +1,8 @@
 
 # pv_forecast_all_in_one.py
-# Streamlit app: produzione FV - storico, previsioni e confronto
-# V7 - pronto per Railway/GitHub
-import io
+# Robotronix Solar V8 (menu stile V4, senza "storico", con TRAIN modello da storici e previsioni a DOMANI)
 import os
-import json
-import math
-import time
-import base64
-import zipfile
 from datetime import datetime, timedelta, timezone
-
 import numpy as np
 import pandas as pd
 import requests
@@ -24,18 +16,15 @@ except Exception:
     st_folium = None
 
 # ---------------- Meteomatics: credenziali + fetch ----------------
-# (richieste dall'utente per esecuzione diretta su Railway/GitHub)
 METEO_USER = "teseospa-eiffageenergiesystemesitaly_daniello_fabio"
 METEO_PASS = "6S8KTHPbrUlp6523T9Xd"
-
-SHOW_DEBUG_URL = False  # lascia False: non mostriamo la URL in UI
+SHOW_DEBUG_URL = False  # non mostrare URL/credenziali in UI
 
 def _orient_cardinal(deg: int) -> str:
     m = {0: "N", 90: "E", 180: "S", 270: "W"}
     if deg in m:
         return m[deg]
-    nearest = min(m.keys(), key=lambda k: abs(k - deg))
-    return m[nearest]
+    return m[min(m.keys(), key=lambda k: abs(k - deg))]
 
 def get_meteomatics_json(lat: float, lon: float, start_iso: str, end_iso: str,
                          tilt_deg: int, orient_deg: int) -> dict:
@@ -46,7 +35,7 @@ def get_meteomatics_json(lat: float, lon: float, start_iso: str, end_iso: str,
         f"{start_iso}--{end_iso}:PT15M/{param}/{lat:.6f},{lon:.6f}/json"
     )
     if SHOW_DEBUG_URL:
-        print("DEBUG MM URL:", url)
+        st.write("DEBUG MM URL:", url)
     r = requests.get(url, auth=(METEO_USER, METEO_PASS), timeout=25)
     r.raise_for_status()
     return r.json()
@@ -57,224 +46,165 @@ def meteomatics_to_df(payload: dict) -> pd.DataFrame:
     data_by_param = {entry["parameter"]: entry["coordinates"][0]["dates"] for entry in payload["data"]}
     ts = [pd.to_datetime(d["date"]) for d in next(iter(data_by_param.values()))]
     df = pd.DataFrame({"ts": ts})
-    # global rad
+    # rad
     k_glob = next((k for k in data_by_param if k.startswith("global_rad")), None)
-    if k_glob:
-        df["global_rad_Wm2"] = [d["value"] for d in data_by_param[k_glob]]
-    else:
-        df["global_rad_Wm2"] = np.nan
+    df["global_rad_Wm2"] = [d["value"] for d in data_by_param.get(k_glob, [])] if k_glob else np.nan
     # cloud cover
     if "total_cloud_cover" in data_by_param:
         df["tcc_pct"] = [d["value"] for d in data_by_param["total_cloud_cover"]]
     else:
         df["tcc_pct"] = np.nan
+    # UTC -> Europe/Rome
+    df["ts"] = pd.to_datetime(df["ts"]).dt.tz_localize("UTC").dt.tz_convert("Europe/Rome")
     return df
 
-# ---------------- Open-Meteo fallback (gratuito) ------------------
-def get_openmeteo_df(lat: float, lon: float, start: datetime, end: datetime) -> pd.DataFrame:
-    # Nota: API pubblica; qui usiamo la stima di radiazione solare globale (shortwave_radiation)
-    # Aggregazione oraria; ricampioniamo a 15 minuti con step interposto.
-    url = (
-        "https://api.open-meteo.com/v1/forecast"
-        f"?latitude={lat}&longitude={lon}"
-        f"&hourly=shortwave_radiation,cloud_cover&timezone=UTC"
-        f"&start_date={start.date()}&end_date={end.date()}"
-    )
-    r = requests.get(url, timeout=20)
-    r.raise_for_status()
-    js = r.json()
-    if "hourly" not in js:
-        return pd.DataFrame(columns=["ts", "global_rad_Wm2", "tcc_pct"])
-    t = pd.to_datetime(js["hourly"]["time"])
-    rad = js["hourly"].get("shortwave_radiation", [np.nan]*len(t))
-    cc = js["hourly"].get("cloud_cover", [np.nan]*len(t))
-    df = pd.DataFrame({"ts": t, "global_rad_Wm2": rad, "tcc_pct": cc})
-    # Ricampiona a 15 min (interpolazione)
-    df = df.set_index("ts").resample("15T").interpolate().reset_index()
-    return df
-
-# ---------------- Utility produzione stimata ----------------------
-def radiation_to_power_w(df: pd.DataFrame, kwp: float, system_eff: float = 0.85) -> pd.DataFrame:
-    """Converte la radiazione globale (W/m2) in potenza FV stimata (kW).
-    Modello semplice: P = G * area_eff * rendimento; area_eff ~ kwp / 0.2 (ipotesi 200 W/m2).
-    """
+# ---------------- Conversione radiazione -> potenza/energia -------
+def radiation_to_power(df: pd.DataFrame, kwp: float, system_eff: float = 0.85) -> pd.DataFrame:
     if df.empty:
         return df.assign(p_kW=np.nan, e_kWh=np.nan)
-    area_eff = kwp / 0.2  # m2 equivalenti (ipotesi moduli 20%)
-    p_w = df["global_rad_Wm2"].clip(lower=0) * area_eff * system_eff
-    p_kw = p_w / 1000.0
-    df_out = df.copy()
-    df_out["p_kW"] = p_kw
-    # Energia su intervallo (15 min): kWh = kW * 0.25
-    df_out["e_kWh"] = df_out["p_kW"] * 0.25
-    return df_out
+    area_eff = kwp / 0.2  # m2 equivalenti con rendimento pannello 20%
+    p_kw = df["global_rad_Wm2"].clip(lower=0) * area_eff * system_eff / 1000.0
+    out = df.copy()
+    out["p_kW"] = p_kw
+    out["e_kWh"] = out["p_kW"] * 0.25  # 15 minuti = 0.25 h
+    return out
 
-def daily_agg(df15: pd.DataFrame, ts_col="ts", e_col="e_kWh") -> pd.DataFrame:
+def daily_agg(df15: pd.DataFrame) -> pd.DataFrame:
     if df15.empty:
-        return pd.DataFrame(columns=["date", "energy_kWh"])
+        return pd.DataFrame(columns=["date","energy_kWh"])
     d = df15.copy()
-    d["date"] = pd.to_datetime(d[ts_col]).dt.date
-    g = d.groupby("date")[e_col].sum().reset_index()
-    g.rename(columns={e_col: "energy_kWh"}, inplace=True)
+    d["date"] = d["ts"].dt.tz_convert("Europe/Rome").dt.date
+    g = d.groupby("date")["e_kWh"].sum().reset_index().rename(columns={"e_kWh":"energy_kWh"})
     return g
 
-# ---------------- UI Helpers -------------------------------------
+# ---------------- Training modello (alpha, beta, shift) -----------
+def train_model_with_history(df_hist_daily: pd.DataFrame, lat, lon, tilt, orient, kwp, eff):
+    """Allena un modello lineare y = alpha * y_pred + beta.
+       df_hist_daily: colonne attese ['Date','E_INT_Daily_kWh'] oppure ['date','energy_kWh']
+    """
+    if df_hist_daily is None or df_hist_daily.empty:
+        return {"alpha":1.0,"beta":0.0,"n_days":0,"rmse":np.nan}
+    # normalizza colonne
+    df = df_hist_daily.copy()
+    df.columns = [c.lower() for c in df.columns]
+    if "date" not in df.columns:
+        date_col = next((c for c in df.columns if "date" in c or "data" in c), df.columns[0])
+        df["date"] = pd.to_datetime(df[date_col]).dt.date
+    else:
+        df["date"] = pd.to_datetime(df["date"]).dt.date
+    if "energy_kwh" not in df.columns:
+        kwh_col = next((c for c in df.columns if "kwh" in c), None)
+        if kwh_col is None:
+            num = df.select_dtypes(include=[float,int]).columns.tolist()
+            kwh_col = num[0] if num else df.columns[1]
+        df["energy_kWh"] = df[kwh_col].astype(float)
+    else:
+        df["energy_kWh"] = df["energy_kwh"].astype(float)
+    df = df[["date","energy_kWh"]].dropna()
+
+    # scarica Meteomatics per l'intervallo coperto dallo storico (margine 1g)
+    start = pd.to_datetime(min(df["date"])) - pd.Timedelta(days=1)
+    end   = pd.to_datetime(max(df["date"])) + pd.Timedelta(days=1)
+    start_iso = start.strftime("%Y-%m-%dT00:00:00Z")
+    end_iso   = end.strftime("%Y-%m-%dT23:45:00Z")
+    try:
+        js = get_meteomatics_json(lat, lon, start_iso, end_iso, tilt, orient)
+        d15 = meteomatics_to_df(js)
+        d15 = radiation_to_power(d15, kwp, eff)
+        pred_daily = daily_agg(d15)
+    except Exception as e:
+        st.error(f"Errore fetch Meteomatics per training: {e}")
+        return {"alpha":1.0,"beta":0.0,"n_days":0,"rmse":np.nan}
+
+    m = pd.merge(df, pred_daily, on="date", how="inner", suffixes=("_real","_pred"))
+    if m.empty:
+        st.warning("Nessuna sovrapposizione date tra storico e previsione per training.")
+        return {"alpha":1.0,"beta":0.0,"n_days":0,"rmse":np.nan}
+
+    y = m["energy_kWh_real"].to_numpy(float)
+    x = m["energy_kWh_pred"].to_numpy(float)
+    if np.var(x) < 1e-9:
+        alpha = 1.0; beta = 0.0
+    else:
+        alpha = float(np.cov(x, y, bias=True)[0,1] / np.var(x))
+        beta  = float(np.mean(y) - alpha*np.mean(x))
+    rmse = float(np.sqrt(np.mean((y - (alpha*x + beta))**2)))
+    return {"alpha":alpha, "beta":beta, "n_days":int(len(m)), "rmse":rmse}
+
+# ---------------- UI (menu stile V4: modello, previsioni, mappa) --
 def page_header():
-    st.set_page_config(page_title="Robotronix Solar V7", layout="wide")
-    st.title("Robotronix Solar • V7")
-    st.caption("Storico, Previsioni e Confronto • Meteomatics + Open‑Meteo (fallback)")
+    st.set_page_config(page_title="Robotronix Solar V8", layout="wide")
+    st.title("Robotronix Solar • V8")
+    st.caption("Menu stile V4 • Modello (training) • Previsioni DOMANI • Mappa")
 
 def sidebar_controls():
-    st.sidebar.header("Impostazioni")
+    st.sidebar.header("Impostazioni impianto")
     lat = st.sidebar.number_input("Latitudine", value=40.836, format="%.6f")
     lon = st.sidebar.number_input("Longitudine", value=14.305, format="%.6f")
     tilt = st.sidebar.slider("Tilt (°)", 0, 60, 25, step=5)
     orient = st.sidebar.slider("Orientamento (° da Nord, senso orario)", 0, 359, 180, step=15)
     kwp = st.sidebar.number_input("Potenza di picco (kWp)", value=50.0, step=1.0)
     eff = st.sidebar.slider("Rendimento di sistema", 0.6, 0.98, 0.85, step=0.01)
-    days_back = st.sidebar.slider("Giorni storici da scaricare", 1, 14, 7)
-    return lat, lon, tilt, orient, kwp, eff, days_back
+    return lat, lon, tilt, orient, kwp, eff
 
-def load_csv(label, default_path):
-    st.write(f"**{label}**")
-    up = st.file_uploader(f"Carica CSV {label}", type=["csv"], key=label)
-    if up is not None:
-        df = pd.read_csv(up)
-        st.success("CSV caricato ✅")
-        return df
-    if os.path.exists(default_path):
-        try:
-            df = pd.read_csv(default_path)
-            st.info(f"Caricato file di default: `{default_path}`")
-            return df
-        except Exception as e:
-            st.warning(f"Impossibile leggere `{default_path}`: {e}")
-    st.warning("Nessun CSV fornito. Uso un esempio minimale.")
-    return pd.DataFrame({"Date": [str(datetime.utcnow().date())], "E_INT_Daily_kWh": [0.0]})
-
-def normalize_real_df(df: pd.DataFrame) -> pd.DataFrame:
-    # accetta due schemi: (1) Date + E_INT_Daily_kWh ; (2) ts + value ; (3) arbitrary con inferenza
-    cols = [c.lower() for c in df.columns]
-    df = df.copy()
-    df.columns = cols
-    if "date" in df.columns and "e_int_daily_kwh" in df.columns:
-        out = df[["date", "e_int_daily_kwh"]].copy()
-        out["date"] = pd.to_datetime(out["date"]).dt.date
-        out.rename(columns={"e_int_daily_kwh": "energy_kWh"}, inplace=True)
-        return out
-    # tentativo generico
-    for a in df.columns:
-        if "date" in a or "data" in a:
-            date_col = a
-            break
-    else:
-        date_col = df.columns[0]
-    # cerca col energia
-    energy_col = None
-    for a in df.columns:
-        if "kwh" in a:
-            energy_col = a
-            break
-    if energy_col is None:
-        # fallback su seconda colonna numerica
-        num_cols = df.select_dtypes(include=[float, int]).columns.tolist()
-        energy_col = num_cols[0] if num_cols else df.columns[1] if len(df.columns)>1 else df.columns[0]
-    out = df[[date_col, energy_col]].copy()
-    out[date_col] = pd.to_datetime(out[date_col]).dt.date
-    out.columns = ["date", "energy_kWh"]
-    return out
-
-def fetch_forecast(lat, lon, tilt, orient, kwp, eff, days_back):
-    tz = timezone.utc
-    end = datetime.now(tz).replace(minute=0, second=0, microsecond=0)
-    start = end - timedelta(days=days_back)
-    start_iso = start.strftime("%Y-%m-%dT%H:%M:%SZ")
-    end_iso = end.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    # tenta Meteomatics
-    try:
-        mm = get_meteomatics_json(lat, lon, start_iso, end_iso, tilt, orient)
-        st.toast("Dati Meteo ricevuti ✅ (Meteomatics)", icon="✅")
-        d15 = meteomatics_to_df(mm)
-    except Exception as e:
-        st.toast("Fallback Open‑Meteo", icon="⚠️")
-        d15 = get_openmeteo_df(lat, lon, start, end)
-
-    d15 = radiation_to_power_w(d15, kwp, system_eff=eff)
-    daily = daily_agg(d15)
-    return d15, daily
-
-def mae(a, f):
-    a = np.array(a, dtype=float)
-    f = np.array(f, dtype=float)
-    m = np.nanmean(np.abs(a - f))
-    return float(m)
-
-def mape(a, f):
-    a = np.array(a, dtype=float)
-    f = np.array(f, dtype=float)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        pe = np.abs((a - f) / np.where(a==0, np.nan, a)) * 100.0
-    return float(np.nanmean(pe))
-
-# ---------------- Pagine ------------------------------------------
-def page_storico(df_real):
-    st.subheader("Andamento Storico")
-    if df_real.empty:
-        st.info("Carica un CSV con produzione reale.")
+def page_modello(lat, lon, tilt, orient, kwp, eff):
+    st.subheader("Modello • Training con dati storici")
+    up = st.file_uploader("Carica CSV storico giornaliero (Date, E_INT_Daily_kWh)", type=["csv"], key="hist")
+    if up is None:
+        st.info("Suggerimento: puoi caricare il tuo CSV per addestrare la calibrazione (alpha, beta).")
         return
-    df_r = normalize_real_df(df_real)
-    # Filtri
-    years = sorted({pd.to_datetime(x).year for x in pd.to_datetime(df_r["date"])})
-    year = st.multiselect("Filtra per anno", years, default=years)
-    df_f = df_r[df_r["date"].apply(lambda d: pd.to_datetime(d).year in set(year))]
-    c1, c2 = st.columns([2,1])
-    with c1:
-        st.line_chart(df_f.set_index("date")["energy_kWh"])
-    with c2:
-        st.metric("Totale (kWh)", f"{df_f['energy_kWh'].sum():,.0f}")
-        st.metric("Media giornaliera (kWh)", f"{df_f['energy_kWh'].mean():,.1f}")
+    df_hist = pd.read_csv(up)
+    st.success("Storico caricato ✅")
+    model = train_model_with_history(df_hist, lat, lon, tilt, orient, kwp, eff)
+    st.session_state["calibration_model"] = model
 
-def page_previsioni(lat, lon, tilt, orient, kwp, eff, days_back):
-    st.subheader("Previsioni Meteo → Produzione FV stimata")
-    d15, daily = fetch_forecast(lat, lon, tilt, orient, kwp, eff, days_back)
-    st.write("**Produzione stimata giornaliera (kWh)**")
-    st.bar_chart(daily.set_index("date")["energy_kWh"])
-    st.download_button("Scarica CSV giornaliero", data=daily.to_csv(index=False), file_name="forecast_daily.csv")
-    st.write("**Serie a 15 minuti (kW)**")
-    st.line_chart(d15.set_index("ts")["p_kW"])
-    st.download_button("Scarica CSV 15 min", data=d15.to_csv(index=False), file_name="forecast_15min.csv")
-
-def page_storico_vs_previsione(df_real, lat, lon, tilt, orient, kwp, eff, days_back):
-    st.subheader("Storico vs Previsione")
-    df_real_n = normalize_real_df(df_real) if not df_real.empty else pd.DataFrame(columns=["date","energy_kWh"])
-    d15, daily = fetch_forecast(lat, lon, tilt, orient, kwp, eff, days_back)
-    # allinea per data
-    m = pd.merge(df_real_n, daily, on="date", how="inner", suffixes=("_real", "_pred"))
-    if m.empty:
-        st.warning("Nessuna sovrapposizione di date tra storico e previsione.")
-        return
     c1, c2, c3 = st.columns(3)
-    mae_val = mae(m["energy_kWh_real"], m["energy_kWh_pred"])
-    mape_val = mape(m["energy_kWh_real"], m["energy_kWh_pred"])
-    bias = (m["energy_kWh_pred"].mean() - m["energy_kWh_real"].mean()) / (m["energy_kWh_real"].mean()+1e-9) * 100
-    c1.metric("MAE (kWh)", f"{mae_val:,.1f}")
-    c2.metric("Scostamento medio (%)", f"{bias:+.1f}%")
-    c3.metric("MAPE (%)", f"{mape_val:.1f}%")
+    c1.metric("Giorni usati", f"{model['n_days']}")
+    c2.metric("RMSE (kWh)", f"{model['rmse']:.2f}" if model['rmse']==model['rmse'] else "—")
+    c3.metric("Fattori", f"alpha={model['alpha']:.3f}, beta={model['beta']:.2f}")
+    st.caption("Il modello stima: energia_reale ≈ alpha·energia_stimata + beta")
 
-    st.write("**Confronto giornaliero (kWh)**")
-    plot_df = m[["date", "energy_kWh_real", "energy_kWh_pred"]].set_index("date")
-    st.line_chart(plot_df)
+def fetch_tomorrow(lat, lon, tilt, orient):
+    # Intervallo: 00:00 → 23:45 del giorno successivo in Europe/Rome, poi in UTC
+    import pytz
+    rome = pytz.timezone("Europe/Rome")
+    tomorrow = datetime.now(rome).date() + timedelta(days=1)
+    start_loc = rome.localize(datetime.combine(tomorrow, datetime.min.time()))
+    end_loc   = rome.localize(datetime.combine(tomorrow, datetime.min.time()) + timedelta(hours=23, minutes=45))
+    start_iso = start_loc.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_iso   = end_loc.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    js = get_meteomatics_json(lat, lon, start_iso, end_iso, tilt, orient)
+    d15 = meteomatics_to_df(js)
+    return d15
 
-    st.dataframe(m.rename(columns={
-        "energy_kWh_real": "Reale (kWh)",
-        "energy_kWh_pred": "Stimato (kWh)"
-    }))
+def page_previsioni(lat, lon, tilt, orient, kwp, eff):
+    st.subheader("Previsioni • DOMANI")
+    d15 = fetch_tomorrow(lat, lon, tilt, orient)
+    d15 = radiation_to_power(d15, kwp, eff)
+
+    # Calibrazione da training
+    model = st.session_state.get("calibration_model", {"alpha":1.0,"beta":0.0})
+    alpha = model.get("alpha",1.0); beta = model.get("beta",0.0)
+    d15["e_kWh_cal"] = d15["e_kWh"]*alpha + beta/96.0
+    d15["p_kW_cal"]  = d15["p_kW"]*alpha
+
+    daily_cal = daily_agg(d15.rename(columns={"e_kWh":"e_kWh_cal"}).assign(e_kWh=d15["e_kWh_cal"]))
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.write("**Potenza prevista (kW) – calibrata**")
+        st.line_chart(d15.set_index("ts")["p_kW_cal"])
+    with c2:
+        st.write("**Energia giornaliera prevista (kWh)**")
+        st.metric("kWh (calibrata)", f"{daily_cal['energy_kWh'].sum():.1f}")
+
+    st.download_button("Scarica previsione 15 min (CSV)", data=d15.to_csv(index=False), file_name="forecast_15min_tomorrow.csv")
+    st.download_button("Scarica previsione giornaliera (CSV)", data=daily_cal.to_csv(index=False), file_name="forecast_daily_tomorrow.csv")
 
 def page_mappa(lat, lon):
     st.subheader("Mappa impianto")
     if folium is None:
-        st.info("Installare folium e streamlit-folium per la mappa.")
+        st.info("Installa folium e streamlit-folium per la mappa.")
         return
     m = folium.Map(location=[lat, lon], zoom_start=13, control_scale=True)
     folium.Marker([lat, lon], tooltip="Impianto FV").add_to(m)
@@ -282,41 +212,17 @@ def page_mappa(lat, lon):
 
 def main():
     page_header()
-    lat, lon, tilt, orient, kwp, eff, days_back = sidebar_controls()
+    lat, lon, tilt, orient, kwp, eff = sidebar_controls()
 
-    # Menu pagine (centralizzato)
-    page = st.sidebar.radio(
-        "Pagina",
-        ("storico", "previsioni", "storico_vs_previsione", "mappa"),
-        captions=[
-            "Grafici storici da CSV",
-            "Previsioni Meteo → Produzione",
-            "Confronto reale vs stimato",
-            "Posizione impianto"
-        ],
-        index=2
-    )
+    # === MENU stile V4 (senza STORICO): modello • previsioni • mappa ===
+    page = st.sidebar.radio("Menu", ("modello", "previsioni", "mappa"),
+                            captions=["Training con storico", "Previsione per domani", "Posizione impianto"],
+                            index=0)
 
-    # Caricamento CSV storici (anche multipli)
-    with st.expander("Dati storici (carica uno o più CSV)"):
-        df_main = load_csv("Dataset_Daily_EnergiaSeparata_2020_2025.csv", "Dataset_Daily_EnergiaSeparata_2020_2025.csv")
-        df_alt = load_csv("Marinara.csv", "Marinara.csv")
-        if not df_main.empty and not df_alt.empty:
-            # se hanno stessa struttura, unisci evitando duplicati
-            try:
-                df_hist = pd.concat([df_main, df_alt], ignore_index=True).drop_duplicates()
-            except Exception:
-                df_hist = df_main
-        else:
-            df_hist = df_main if not df_main.empty else df_alt
-
-    # Routing pagine
-    if page == "storico":
-        page_storico(df_hist)
+    if page == "modello":
+        page_modello(lat, lon, tilt, orient, kwp, eff)
     elif page == "previsioni":
-        page_previsioni(lat, lon, tilt, orient, kwp, eff, days_back)
-    elif page == "storico_vs_previsione":
-        page_storico_vs_previsione(df_hist, lat, lon, tilt, orient, kwp, eff, days_back)
+        page_previsioni(lat, lon, tilt, orient, kwp, eff)
     elif page == "mappa":
         page_mappa(lat, lon)
 

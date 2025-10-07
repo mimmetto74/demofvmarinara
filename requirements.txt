@@ -4,4 +4,4 @@ numpy
 requests
 folium
 streamlit-folium
-scikit-learn
+pytz
