@@ -1,6 +1,7 @@
-streamlit
-pandas
-numpy
-scikit-learn
-requests
-joblib
+streamlit==1.37.1
+pandas==2.2.2
+numpy==1.26.4
+scikit-learn==1.5.1
+requests==2.32.3
+folium==0.17.0
+streamlit-folium==0.20.0
