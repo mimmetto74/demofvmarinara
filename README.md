@@ -1,1 +1,2 @@
-# Robotronix Solar V8 (menu stile V4)
+# Robotronix Solar V8.1 Fixed
+Meteomatics fix (parametri validi) + fallback automatico Open-Meteo.
